@@ -1,0 +1,116 @@
+pipeline {
+  agent any
+
+  // Name the venv folder once, reuse across stages in one build
+  environment {
+    VIRTUAL_ENV = 'venv'
+    PIP_CACHE_DIR = "${env.WORKSPACE}/.pip-cache"
+  }
+
+  options {
+    ansiColor('xterm')
+    timestamps()
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'python --version || true'
+        sh 'pip --version || true'
+      }
+    }
+
+    stage('Setup') {
+      steps {
+        script {
+          // Create venv if missing
+          if (!fileExists("${env.WORKSPACE}/${VIRTUAL_ENV}")) {
+            sh "python -m venv ${VIRTUAL_ENV}"
+          }
+          // Upgrade pip + install deps (cache pip)
+          sh """
+            python -m pip install --upgrade pip
+            ${VIRTUAL_ENV}/bin/pip install --upgrade pip wheel
+            mkdir -p ${PIP_CACHE_DIR}
+            PIP_CACHE_DIR=${PIP_CACHE_DIR} ${VIRTUAL_ENV}/bin/pip install -r requirements.txt
+          """
+        }
+      }
+    }
+
+    stage('Lint') {
+      steps {
+        sh "${VIRTUAL_ENV}/bin/flake8 app.py"
+      }
+    }
+
+    stage('Test') {
+      steps {
+        sh "${VIRTUAL_ENV}/bin/pytest -q"
+      }
+      post {
+        always {
+          junit allowEmptyResults: true, testResults: '**/pytest*.xml'
+        }
+      }
+    }
+
+    stage('Coverage') {
+      steps {
+        sh """
+          ${VIRTUAL_ENV}/bin/coverage run -m pytest --junitxml=pytest-results.xml
+          ${VIRTUAL_ENV}/bin/coverage report -m
+          ${VIRTUAL_ENV}/bin/coverage xml -o coverage.xml
+        """
+      }
+      post {
+        always {
+          // Publish Cobertura-style coverage if you have the plugin installed
+          cobertura autoUpdateHealth: false, autoUpdateStability: false, coberturaReportFile: 'coverage.xml', failNoReports: false, onlyStable: false, sourceEncoding: 'UTF_8'
+          // Also archive the raw report
+          archiveArtifacts artifacts: 'coverage.xml', fingerprint: true
+        }
+      }
+    }
+
+    stage('Security Scan') {
+      steps {
+        sh "${VIRTUAL_ENV}/bin/bandit -r . -f txt -o bandit.txt || true"
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'bandit.txt', fingerprint: true
+        }
+        unsuccessful {
+          echo 'Bandit found issues (non-fatal in this template). Review bandit.txt.'
+        }
+      }
+    }
+
+    stage('Deploy') {
+      when {
+        branch 'main'
+      }
+      steps {
+        // Simple "deploy": package an artifact and archive it.
+        // Replace with SCP/SSH/docker push/etc for real deployment.
+        sh """
+          mkdir -p dist
+          echo '#!/usr/bin/env bash' > dist/run.sh
+          echo 'source ${VIRTUAL_ENV}/bin/activate && python app.py' >> dist/run.sh
+          chmod +x dist/run.sh
+          tar -czf dist/app_bundle.tgz app.py requirements.txt .flake8 || true
+        """
+        archiveArtifacts artifacts: 'dist/**', fingerprint: true
+        echo "Deploying application... (replace this with real deployment steps as needed)"
+      }
+    }
+  }
+
+  post {
+    always {
+      cleanWs()
+    }
+  }
+}
