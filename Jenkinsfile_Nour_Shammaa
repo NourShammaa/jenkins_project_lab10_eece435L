@@ -40,34 +40,32 @@ pipeline {
         bat "%VENV%\\Scripts\\flake8 app.py"
       }
     }
-
     stage('Test') {
       steps {
-        // Produce JUnit so Jenkins shows test results
-        bat "%VENV%\\Scripts\\pytest --junitxml=pytest-results.xml -q"
+    // Add workspace to Python path so "from app import greet" works
+        bat "set PYTHONPATH=%CD% && %VENV%\\Scripts\\pytest --junitxml=pytest-results.xml -q"
       }
       post {
         always {
-          junit allowEmptyResults: true, testResults: 'pytest-results.xml'
-        }
-      }
+      junit allowEmptyResults: true, testResults: 'pytest-results.xml'
     }
-
+  }
+}
     stage('Coverage') {
       steps {
         bat """
-        %VENV%\\Scripts\\coverage run -m pytest --junitxml=pytest-results.xml
-        %VENV%\\Scripts\\coverage report -m
-        %VENV%\\Scripts\\coverage xml -o coverage.xml
-        """
+    set PYTHONPATH=%CD% && %VENV%\\Scripts\\coverage run -m pytest --junitxml=pytest-results.xml
+    %VENV%\\Scripts\\coverage report -m
+    %VENV%\\Scripts\\coverage xml -o coverage.xml
+    """
       }
       post {
         always {
           archiveArtifacts artifacts: 'coverage.xml', fingerprint: true
-        }
-      }
     }
-
+  }
+}
+   
     stage('Security Scan') {
       steps {
         // Don't fail build if Bandit finds issues in this template
